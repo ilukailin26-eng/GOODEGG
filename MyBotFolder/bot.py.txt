@@ -1,0 +1,100 @@
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils import executor
+import logging
+
+# ===========================
+API_TOKEN = "8540526586:AAFkeCCu3FoMcpZq_4hc8iVhx_xNbdOh27M"
+CHANNEL_ID = "@PodslushanoScoolKrg"  # ссылка на канал
+ADMIN_ID = 7335111629  # твой Telegram ID
+# ===========================
+
+logging.basicConfig(level=logging.INFO)
+
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(bot)
+
+# --- Кнопки выбора типа сообщения ---
+type_keyboard = InlineKeyboardMarkup(row_width=2)
+type_keyboard.add(
+    InlineKeyboardButton("🕶 Анонимное", callback_data="anonymous"),
+    InlineKeyboardButton("👤 Открытое", callback_data="open")
+)
+
+# --- Кнопки модерации для админа ---
+moderate_keyboard = InlineKeyboardMarkup(row_width=3)
+moderate_keyboard.add(
+    InlineKeyboardButton("✅ Отправить", callback_data="send"),
+    InlineKeyboardButton("❌ Отклонить", callback_data="reject"),
+    InlineKeyboardButton("💬 Ответить", callback_data="reply")
+)
+
+# --- временная память сообщений ---
+user_data = {}  # key=user_id, value=dict(type, school, text, admin_msg_id)
+
+# --- /start ---
+@dp.message_handler(commands=['start'])
+async def start_cmd(message: types.Message):
+    await message.answer(
+        "Привет! Если бот не ответил сразу, нажмите /start ещё раз.\nКакое сообщение вы хотите отправить?",
+        reply_markup=type_keyboard
+    )
+
+# --- Выбор типа сообщения ---
+@dp.callback_query_handler(lambda c: c.data in ["anonymous", "open"])
+async def choose_type(callback_query: types.CallbackQuery):
+    user_data[callback_query.from_user.id] = {"type": callback_query.data}
+    await bot.send_message(callback_query.from_user.id, "От какой школы вы хотите написать?")
+    await callback_query.answer()
+
+# --- Получение школы ---
+@dp.message_handler(lambda m: m.from_user.id in user_data and "school" not in user_data[m.from_user.id])
+async def get_school(message: types.Message):
+    user_data[message.from_user.id]["school"] = message.text
+    await message.answer("Напишите текст сообщения:")
+
+# --- Получение текста сообщения ---
+@dp.message_handler(lambda m: m.from_user.id in user_data and "text" not in user_data[m.from_user.id])
+async def get_text(message: types.Message):
+    t = user_data[message.from_user.id]
+    t["text"] = message.text
+
+    # формируем сообщение для админа
+    msg = f"{'🕶 АНОНИМНОЕ' if t['type']=='anonymous' else '👤 ОТКРЫТОЕ'} СООБЩЕНИЕ\nШкола: {t['school']}\n\n{t['text']}"
+    
+    # отправляем только админу
+    admin_msg = await bot.send_message(ADMIN_ID, msg, reply_markup=moderate_keyboard)
+    t["admin_msg_id"] = admin_msg.message_id
+
+    await message.answer("✅ Ваше сообщение отправлено на модерацию. Если бот не ответил, нажмите /start ещё раз.")
+
+# --- Обработка кнопок модерации ---
+@dp.callback_query_handler(lambda c: c.data in ["send", "reject", "reply"])
+async def moderation_buttons(callback_query: types.CallbackQuery):
+    t = None
+    # находим данные пользователя по сообщению
+    for user_id, data in user_data.items():
+        if data.get("admin_msg_id") == callback_query.message.message_id:
+            t = data
+            break
+
+    if t is None:
+        await callback_query.answer("Ошибка: не найден пользователь")
+        return
+
+    user_id = user_id  # ID пользователя
+    msg_text = f"🕶 Анонимное сообщение\nШкола – {t['school']}\n\n{t['text']}" if t['type']=='anonymous' else f"👤 Открытое сообщение от @{callback_query.from_user.username}\nШкола – {t['school']}\n\n{t['text']}"
+
+    if callback_query.data == "send":
+        await bot.send_message(CHANNEL_ID, msg_text)
+        await bot.send_message(user_id, "✅ Ваше сообщение отправлено в канал.")
+        await callback_query.answer("Сообщение отправлено в канал")
+    elif callback_query.data == "reject":
+await bot.send_message(user_id, "❌ Ваше сообщение отклонено модератором.")
+        await callback_query.answer("Сообщение отклонено")
+    elif callback_query.data == "reply":
+        await bot.send_message(user_id, "✉️ Ответ модератора:\nНапишите текст ответа:")
+        await callback_query.answer("Напишите ответ пользователю")
+
+if name == 'main':
+    executor.start_polling(dp, skip_updates=True)
